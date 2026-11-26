@@ -83,8 +83,8 @@ def send(args):
     body = read_body()
     if args.task and not args.reopen:
         raise ValueError("指定任务 ID 时需要使用 --reopen。")
-    route = workspace_routes.match(args.config, Path.cwd())
     workspace_routes.check_setup(args.config, args.state, BRIDGE)
+    route = workspace_routes.match(args.config, Path.cwd(), register=True)
     workspace_routes.ensure_sidecar(args.config, args.state, route, BRIDGE)
     channel = args.state / thread
     channel.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -6,16 +6,16 @@
 
 需要在同一台 Mac 上运行 Codex 和已登录的 Antigravity Desktop，并使用 Python 3.9 或以上版本。
 
-1. 启动 Antigravity Desktop 并登录。为 Codex 聊天使用的目录创建本机项目，只添加该目录。Git worktree 使用它自己的绝对路径。
+1. 启动 Antigravity Desktop 并登录。
 2. 克隆仓库，从仓库根目录安装 Skill。已有同名 Skill 时，先备份原目录。
    ```sh
    mkdir -p "$HOME/.agents/skills"
    cp -R skills/antigravity "$HOME/.agents/skills/"
    python3 -B "$HOME/.agents/skills/antigravity/scripts/bridge.py" setup
    ```
-3. 在 Codex 聊天里输入 `$antigravity 消息`。保持 Antigravity Desktop 运行。
+3. 在目标目录的 Codex 聊天里输入 `$antigravity 消息`。保持 Antigravity Desktop 运行。首次发送时，桥接会按实际绝对路径自动登记本机项目，Git worktree 使用自己的路径。
 
-初始化会为 Antigravity 添加一个本机完成回调。某个已登记的项目第一次收到请求时，桥接会为它启用 Sidecar。回调记录会话完成状态，桥接读取原生答复。任务状态和投递记录保存在本机 Antigravity 数据目录。
+初始化会为 Antigravity 添加一个本机完成回调。某个工作目录第一次收到请求时，桥接会为它启用 Sidecar。回调记录会话完成状态，桥接读取原生答复。任务状态和投递记录保存在本机 Antigravity 数据目录。
 
 移动 Skill 后，在新位置重新运行 `setup`。它会更新此桥接的回调和 Sidecar 路径。尽量避免与 Antigravity 设置界面同时修改配置，若检测到配置变化，重试初始化或首次发送。
 

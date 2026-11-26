@@ -5,6 +5,7 @@ from pathlib import Path
 import shlex
 import sys
 from urllib.parse import unquote, urlsplit
+import uuid
 
 from local_state import UUID, locked, read_json, write_json
 
@@ -49,16 +50,39 @@ def load_project(config, project_id):
     return Route(project_id, workspace.resolve(), name if isinstance(name, str) and name else workspace.name)
 
 
-def match(config, cwd):
-    workspace = cwd.resolve()
+def registered_projects(config, workspace):
     configured = bindings(config)
     candidates = [load_project(config, path.stem) for path in (config / "projects").glob("*.json")]
     candidates = [project for project in candidates
                   if project and not is_sidecar_projection(config, project, configured)]
-    matches = [project for project in candidates if project and project.workspace == workspace]
+    return [project for project in candidates if project and project.workspace == workspace]
+
+
+def match(config, cwd, *, register=False):
+    workspace = cwd.resolve()
+    matches = registered_projects(config, workspace)
+    if not matches and register:
+        if not workspace.is_dir():
+            raise ValueError(f"Codex 工作目录不存在：{workspace}。")
+        with locked(config / LOCK_NAME):
+            matches = registered_projects(config, workspace)
+            if not matches:
+                project_id = str(uuid.uuid4())
+                name = workspace.name or str(workspace)
+                directory = config / "projects"
+                directory.mkdir(mode=0o700, exist_ok=True)
+                write_json(directory / f"{project_id}.json", {
+                    "id": project_id,
+                    "name": name,
+                    "projectResources": {"resources": [{"folderUri": workspace.as_uri()}]},
+                    "permissionGrants": {},
+                    "settings": {},
+                    "isWorkspaceOnly": False,
+                })
+                matches = [Route(project_id, workspace, name)]
     if not matches:
         raise ValueError(f"Antigravity 尚未登记此目录的单文件夹本机项目：{workspace}。"
-                         "请在 Antigravity 添加该目录后重试。")
+                         "发送首条消息时会自动登记。")
     if len(matches) > 1:
         names = "、".join(sorted(project.name for project in matches))
         raise ValueError(f"多个 Antigravity 项目登记了同一目录：{names}。请保留明确的单文件夹项目。")

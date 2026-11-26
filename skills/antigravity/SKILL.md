@@ -5,7 +5,7 @@ description: 'Use when the user invokes $antigravity or asks Antigravity to answ
 
 # Antigravity collaboration
 
-Resolve `scripts/bridge.py` relative to this installed `SKILL.md`. Run `python3 -B <absolute-bridge-path>` from the Codex chat's actual workspace directory. The bridge matches the exact local Antigravity project, including an explicitly registered Git worktree. If matching fails, relay the path and registration issue. Keep Antigravity Desktop running.
+Resolve `scripts/bridge.py` relative to this installed `SKILL.md`. Run `python3 -B <absolute-bridge-path>` from the Codex chat's actual workspace directory. The bridge matches the exact local Antigravity project, including an explicitly registered Git worktree. The first send automatically registers a missing exact directory in Antigravity. A status query only reads existing state. If registration or matching fails, relay the exact path and the observed error. Keep Antigravity Desktop running.
 
 On first installation or after moving the Skill, run `python3 -B <absolute-bridge-path> setup` to configure the local completion hook and bridge-owned Sidecars. If delivery is uncertain, preserve the ticket and report that the user can use `$antigravity 恢复任务 消息` to carry the saved state into a fresh Antigravity conversation.
 
@@ -36,3 +36,5 @@ The `context` output includes the task ID. The user can use that ID to resume th
 When handing off ongoing Codex work, update confirmed facts that are relevant and authorized for this task. Pass an object of string values on stdin to `context --update`. Supported fields are `objective`, `constraints`, `decisions`, `branch`, `pr`, `verification`, `next_step`, and `open_questions`. Update only fields with new facts. Keep user decisions, pending questions, and Antigravity's own suggestions distinct. If there is no task yet, include the relevant facts in the first message.
 
 For a review, include the implemented change and observed evidence in the message. If the user requests implementation as well, carry it out in Codex under the project's normal rules. Share task-relevant summaries and verified artifacts. Include other chat content only when requested.
+
+If this installation has `references/coordination.md` and the user explicitly asks for separate Codex chats to execute assigned tasks, read and follow that reference.

@@ -141,11 +141,21 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(json.loads(installed)["existing"], {"enabled": False})
         unknown = self.root / "unregistered"
         unknown.mkdir()
-        rejected = self.run_bridge("send", cwd=unknown, body="not delivered", check=False)
+        rejected = self.run_bridge("context", cwd=unknown, check=False)
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn(str(unknown), rejected.stderr)
         self.assertEqual(json.loads(self.config_json.read_text())["sidecars"], {"existing": {"enabled": False}})
         self.assertFalse(self.state.exists())
+        original = set((self.config / "projects").glob("*.json"))
+        ticket = self.run_bridge("send", cwd=unknown, body="Auto-register this folder").stdout.strip()
+        request = self.record(ticket, "request")
+        project = self.config / "projects" / f"{request['project_id']}.json"
+        self.assertEqual(set((self.config / "projects").glob("*.json")) - original, {project})
+        self.assertEqual(json.loads(project.read_text())["permissionGrants"], {})
+        self.assertEqual(json.loads(project.read_text())["projectResources"],
+                         {"resources": [{"folderUri": unknown.as_uri()}]})
+        reopened = self.run_bridge("send", "--new", cwd=unknown, body="Same folder again").stdout.strip()
+        self.assertEqual(self.record(reopened, "request")["project_id"], request["project_id"])
 
     def test_setup_can_coexist_with_a_legacy_sidecar_project(self):
         label = f"accowork-{self.ids[0]}"
