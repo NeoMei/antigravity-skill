@@ -5,7 +5,9 @@ description: 'Use when the user invokes $antigravity or asks Antigravity to answ
 
 # Antigravity collaboration
 
-Resolve `scripts/bridge.py` relative to this installed `SKILL.md`. Run `python3 -B <absolute-bridge-path>` from the Codex chat's actual workspace directory. The bridge matches the exact local Antigravity project, including an explicitly registered Git worktree. If matching fails, relay the path and registration issue. Keep Antigravity Desktop running. The one-time `setup` command registers the local completion hook documented in the repository README.
+Resolve `scripts/bridge.py` relative to this installed `SKILL.md`. Run `python3 -B <absolute-bridge-path>` from the Codex chat's actual workspace directory. The bridge matches the exact local Antigravity project, including an explicitly registered Git worktree. If matching fails, relay the path and registration issue. Keep Antigravity Desktop running.
+
+On first installation or after moving the Skill, run `python3 -B <absolute-bridge-path> setup` to configure the local completion hook and bridge-owned Sidecars. If delivery is uncertain, preserve the ticket and report that the user can use `$antigravity 恢复任务 消息` to carry the saved state into a fresh Antigravity conversation.
 
 ## Send and receive
 

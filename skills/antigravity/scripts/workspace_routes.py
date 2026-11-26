@@ -79,6 +79,59 @@ def hook_definition(config, state, bridge_file):
     return {"Stop": [{"type": "command", "command": shlex.join(stop), "timeout": 5}]}
 
 
+def previous_installation(old, new):
+    return (len(old) == len(new) and old[1] == "-B" and Path(old[2]).name == "bridge.py"
+            and Path(old[2]).parent.name == "scripts" and old[3:] == new[3:])
+
+
+def can_update_hook(old, new):
+    if not isinstance(old, dict) or set(old) != {"Stop"}:
+        return False
+    fields = old["Stop"]
+    if not isinstance(fields, list) or len(fields) != 1 or not isinstance(fields[0], dict):
+        return False
+    value = fields[0]
+    expected = new["Stop"][0]
+    if ({**value, "command": expected["command"]} != expected
+            or not isinstance(value.get("command"), str)):
+        return False
+    return previous_installation(shlex.split(value["command"]), shlex.split(expected["command"]))
+
+
+def sidecar_manifest(config, state, bridge_file, route):
+    command = bridge_command(config, state, bridge_file, "serve", "--project", route.id,
+                             "--sidecar", PREFIX + route.id)
+    return {"display_name": f"Codex · {route.name}",
+            "description": "Routes this local Antigravity project to its Codex chats.",
+            "command": command[0], "args": command[1:], "restart_policy": "on-failure"}
+
+
+def command_from_manifest(manifest):
+    return [manifest["command"], *manifest["args"]]
+
+
+def sidecar_moves(config, state, bridge_file):
+    moves = []
+    for name in bindings(config):
+        if not name.startswith(PREFIX):
+            continue
+        route = load_project(config, name.removeprefix(PREFIX))
+        if not route:
+            continue
+        path = config / "sidecars" / name / "sidecar.json"
+        if not path.is_file():
+            continue
+        current = read_json(path)
+        expected = sidecar_manifest(config, state, bridge_file, route)
+        old, new = command_from_manifest(current), command_from_manifest(expected)
+        if old == new:
+            continue
+        if not previous_installation(old, new):
+            raise ValueError(f"Sidecar 定义冲突：{path}。")
+        moves.append((path, {**current, "command": expected["command"], "args": expected["args"]}))
+    return moves
+
+
 def setup(config, state, bridge_file):
     if not (config / "config.json").is_file():
         raise ValueError("Antigravity 配置尚未生成。请先启动并登录 Antigravity Desktop。")
@@ -88,15 +141,14 @@ def setup(config, state, bridge_file):
         initial = path.read_bytes() if path.is_file() else None
         hooks = json.loads(initial) if initial is not None else {}
         existing = hooks.get(HOOK_NAME)
-        if existing == expected:
-            return
-        if existing is not None:
-            raise ValueError(f"{path} 已有同名回调，请确认原 Skill 的安装位置。")
-        hooks[HOOK_NAME] = expected
-        current = path.read_bytes() if path.is_file() else None
-        if initial != current:
-            raise ValueError("Antigravity 回调配置刚被更新，请重试。")
-        write_json(path, hooks, replace=True)
+        if existing is not None and existing != expected and not can_update_hook(existing, expected):
+            raise ValueError(f"{path} 已有同名回调，请确认其来源。")
+        moves = sidecar_moves(config, state, bridge_file)
+        for manifest, replacement in moves:
+            write_json(manifest, replacement, replace=True)
+        if existing != expected:
+            hooks[HOOK_NAME] = expected
+            write_json(path, hooks, replace=True, expected=initial)
 
 
 def check_setup(config, state, bridge_file):
@@ -156,7 +208,11 @@ def configured_sidecar(config, route, sidecars):
 
 
 def ensure_sidecar(config, state, route, bridge_file):
-    if configured_sidecar(config, route, bindings(config))[2]:
+    expected = sidecar_manifest(config, state, bridge_file, route)
+    _, manifest, exists = configured_sidecar(config, route, bindings(config))
+    if exists:
+        if command_from_manifest(read_json(manifest)) != command_from_manifest(expected):
+            raise ValueError("Sidecar 仍指向旧安装。请运行当前 Skill 中的 bridge.py setup。")
         return
     config_file = config / "config.json"
     with locked(config / LOCK_NAME):
@@ -165,16 +221,10 @@ def ensure_sidecar(config, state, route, bridge_file):
         sidecars = settings.setdefault("sidecars", {})
         name, manifest, exists = configured_sidecar(config, route, sidecars)
         if exists:
+            if command_from_manifest(read_json(manifest)) != command_from_manifest(expected):
+                raise ValueError("Sidecar 仍指向旧安装。请运行当前 Skill 中的 bridge.py setup。")
             return
         manifest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        command = bridge_command(config, state, bridge_file, "serve", "--project", route.id, "--sidecar", name)
-        expected = {
-            "display_name": f"Codex · {route.name}",
-            "description": "Routes this local Antigravity project to its Codex chats.",
-            "command": command[0],
-            "args": command[1:],
-            "restart_policy": "on-failure",
-        }
         if manifest.is_file():
             if read_json(manifest) != expected:
                 raise ValueError(f"Sidecar 定义冲突：{manifest}。")
@@ -182,6 +232,4 @@ def ensure_sidecar(config, state, route, bridge_file):
             write_json(manifest, expected)
         # Antigravity migrates unversioned entries into generated projects.
         sidecars[name] = {"enabled": True, "projectId": route.id, "schemaVersion": 1}
-        if config_file.read_bytes() != data:
-            raise ValueError("Antigravity 配置刚被更新，请重试。")
-        write_json(config_file, settings, replace=True)
+        write_json(config_file, settings, replace=True, expected=data)

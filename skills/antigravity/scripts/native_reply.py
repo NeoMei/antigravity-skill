@@ -12,6 +12,12 @@ def transcript_path(state, conversation_id):
     return app_data / "brain" / conversation_id / ".system_generated" / "logs" / "transcript.jsonl"
 
 
+def complete_transcript(state, conversation_id):
+    path = transcript_path(state, conversation_id)
+    full = path.with_name("transcript_full.jsonl")
+    return full if full.is_file() else path
+
+
 def transcript_rows(path):
     try:
         with path.open(encoding="utf-8") as stream:
@@ -30,7 +36,7 @@ def last_step(state, conversation_id):
     if conversation_id is None:
         return -1
     return max((row["step_index"] for row in transcript_rows(
-        transcript_path(state, conversation_id))), default=-1)
+        complete_transcript(state, conversation_id))), default=-1)
 
 
 def user_body(row):
@@ -46,23 +52,34 @@ def user_body(row):
     return None
 
 
+def stopped_turn(state, conversation_id, body, after_step):
+    path = complete_transcript(state, conversation_id)
+    start = None
+    for row in transcript_rows(path):
+        message = user_body(row)
+        if row["step_index"] <= after_step or message is None:
+            continue
+        if start is not None or message.rstrip() != body.rstrip():
+            return None
+        start = row["step_index"]
+    return start
+
+
 def finished_answer(state, receipt, body, stopped):
     if stopped["at_ns"] < receipt["sent_at_ns"]:
         return None
-    path = transcript_path(state, receipt["conversation_id"])
-    full = path.with_name("transcript_full.jsonl")
-    if full.is_file():
-        path = full
+    path = complete_transcript(state, receipt["conversation_id"])
+    start = stopped["turn_step"]
     matched = False
     answer = None
     for row in transcript_rows(path):
-        if row["step_index"] <= receipt["after_step"]:
+        if row["step_index"] < start:
             continue
         message = user_body(row)
         if message is not None:
             if matched:
                 break
-            matched = message.rstrip() == body.rstrip()
+            matched = row["step_index"] == start and message.rstrip() == body.rstrip()
         elif (matched and row.get("type") == "PLANNER_RESPONSE"
               and row.get("source") == "MODEL" and row.get("status") == "DONE"
               and not row.get("tool_calls")

@@ -63,6 +63,11 @@ completed = subprocess.run(shlex.split(hook["command"]), input=json.dumps({
     "terminationReason": "NO_TOOL_CALL",
 }), text=True, capture_output=True, check=True)
 assert completed.stdout.strip() == "{}"
+if os.environ.get("FIXTURE_DISABLE_AFTER_SEND"):
+    path = config / "config.json"
+    settings = json.loads(path.read_text())
+    settings["sidecars"][sidecar]["enabled"] = False
+    path.write_text(json.dumps(settings))
 '''
 
 
@@ -112,13 +117,13 @@ class BridgeTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
-    def serve(self, i):
+    def serve(self, i, **env):
         project = self.ids[i]
         sidecar = f"codex-antigravity-{project}"
         manifest = json.loads((self.config / "sidecars" / sidecar / "sidecar.json").read_text())
         result = subprocess.run([manifest["command"], *manifest["args"], "--once"], text=True,
                                 capture_output=True, env={**self.env, "FIXTURE_SIDECAR": sidecar,
-                                "FIXTURE_WORKSPACE": str(self.workspaces[i])}, timeout=15)
+                                "FIXTURE_WORKSPACE": str(self.workspaces[i]), **env}, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def record(self, ticket, name):
@@ -149,6 +154,19 @@ class BridgeTest(unittest.TestCase):
         self.assertNotEqual(pending.returncode, 0)
         self.serve(0)
         self.serve(0)
+        initial = self.record(plan, "receipt")
+        session = initial["conversation_id"]
+        logs = self.app / "brain" / session / ".system_generated" / "logs"
+        with (logs / "transcript_full.jsonl").open("a") as stream:
+            stream.write(json.dumps({
+                "step_index": 3, "type": "USER_INPUT",
+                "content": "<USER_REQUEST>\nManual follow-up\n</USER_REQUEST>",
+            }) + "\n")
+        self.run_bridge("stop", body=json.dumps({
+            "conversationId": session, "fullyIdle": True,
+            "workspacePaths": [str(self.workspaces[0])],
+            "transcriptPath": str(logs / "transcript_full.jsonl"), "terminationReason": "error",
+        }))
         self.assertEqual(self.run_bridge("receive", plan).stdout, REPLY)
         self.run_bridge("context", "--update", body='{"verification":"15 bytes verified"}')
         review = self.run_bridge("send", "--mode", "review", body="Review evidence").stdout.strip()
@@ -181,6 +199,47 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(calls[-1][2], str(self.workspaces[1]))
         settings = json.loads(self.config_json.read_text())["sidecars"]
         self.assertEqual(settings[f"codex-antigravity-{self.ids[1]}"]["schemaVersion"], 1)
+        self.assertEqual(json.loads(self.run_bridge("context").stdout), state)
+        back = self.run_bridge("send", body="Back in the original directory").stdout.strip()
+        self.assertEqual(self.record(back, "request")["conversation_id"], first["conversation_id"])
+
+    def test_moving_installation_refreshes_the_hook_and_sidecar(self):
+        self.run_bridge("setup")
+        ticket = self.run_bridge("send", body="Before moving").stdout.strip()
+        self.serve(0)
+        self.assertEqual(self.run_bridge("receive", ticket).stdout, REPLY)
+        moved = self.root / "new skill location" / "antigravity"
+        moved.parent.mkdir()
+        shutil.move(self.bridge.parents[1], moved)
+        self.bridge = moved / "scripts" / "bridge.py"
+        self.run_bridge("setup")
+        ticket = self.run_bridge("send", body="After moving").stdout.strip()
+        self.serve(0)
+        self.assertEqual(self.run_bridge("receive", ticket).stdout, REPLY)
+        self.assertEqual(json.loads(self.hooks_json.read_text())["existing"], {"enabled": False})
+
+    def test_worker_rechecks_binding_and_marks_interrupted_delivery(self):
+        self.run_bridge("setup")
+        tickets = []
+        for thread in sorted([self.thread, str(uuid.uuid4())]):
+            env = {**self.env, "CODEX_THREAD_ID": thread}
+            ticket = self.run_bridge("send", body="Queued request", env=env).stdout.strip()
+            tickets.append(ticket)
+        self.serve(0, FIXTURE_DISABLE_AFTER_SEND="1")
+        self.assertEqual(self.record(tickets[0], "receipt")["status"], "sent")
+        self.assertEqual(self.record(tickets[1], "receipt")["status"], "error")
+        self.assertEqual(len((self.app / "calls.jsonl").read_text().splitlines()), 1)
+        settings = json.loads(self.config_json.read_text())
+        settings["sidecars"][f"codex-antigravity-{self.ids[0]}"]["enabled"] = True
+        self.config_json.write_text(json.dumps(settings))
+        thread = str(uuid.uuid4())
+        env = {**self.env, "CODEX_THREAD_ID": thread}
+        ticket = self.run_bridge("send", body="Interrupted request", env=env).stdout.strip()
+        stage = ticket.split("/")[1]
+        (self.state / thread / f"{stage}.receipt.json").write_text('{"status":"dispatching"}')
+        self.serve(0)
+        self.assertEqual(self.record(ticket, "receipt")["status"], "uncertain")
+        self.assertEqual(len((self.app / "calls.jsonl").read_text().splitlines()), 1)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ def collect_answer(state, channel, stage, receipt):
     if cache.is_file():
         answer = read_json(cache)["answer"]
     else:
-        stopped_path = state.parent / "stops" / f"{receipt['conversation_id']}.json"
+        stopped_path = channel / f"{stage}.stop.{receipt['conversation_id']}.json"
         if not stopped_path.is_file():
             return None
         stopped = read_json(stopped_path)
@@ -70,6 +70,14 @@ def same_route(request, route):
     return request["workspace"] == str(route.workspace) and request["project_id"] == route.id
 
 
+def latest_request(requests, route):
+    for path in reversed(requests):
+        request = read_json(path)
+        if same_route(request, route):
+            return path.name.split(".")[0], request
+    return None, {}
+
+
 def send(args):
     thread = current_thread()
     body = read_body()
@@ -87,10 +95,10 @@ def send(args):
         task_id = None
         task_owner = thread
         if requests:
-            previous = requests[-1].name.split(".")[0]
-            number = int(MESSAGE_NAME.fullmatch(previous)[1]) + 1
-            last = read_json(requests[-1])
-            keep_task = not args.new and same_route(last, route)
+            latest = requests[-1].name.split(".")[0]
+            number = int(MESSAGE_NAME.fullmatch(latest)[1]) + 1
+            previous, last = latest_request(requests, route)
+            keep_task = not args.new and previous is not None
             if keep_task:
                 task_id = last.get("task_id")
                 task_owner = last.get("task_owner", thread)
@@ -141,8 +149,8 @@ def context(args):
         raise ValueError("此目录下没有当前任务状态，请先发起 Antigravity 会话。")
     with locked(channel / ".send.lock"):
         requests = sorted(channel.glob("message-??????.request.json"))
-        request = read_json(requests[-1]) if requests else {}
-        if not request.get("task_id") or not same_route(request, route):
+        _, request = latest_request(requests, route)
+        if not request.get("task_id"):
             raise ValueError("此目录下没有当前任务状态，请先发起 Antigravity 会话。")
         path = task_path(args.state, channel, request)
         value = (task_state.update_confirmed(path, json.loads(read_body()))
@@ -205,14 +213,34 @@ def record_stop(state, config):
         reported = Path(event.get("transcriptPath", "")).expanduser().resolve()
         expected = native_reply.transcript_path(state, conversation_id).resolve()
         if reported in {expected, expected.with_name("transcript_full.jsonl")}:
-            stops = state.parent / "stops"
-            stops.mkdir(mode=0o700, parents=True, exist_ok=True)
-            write_json(stops / f"{conversation_id}.json", {
-                "at_ns": time.time_ns(),
-                "reason": event.get("terminationReason", ""),
-                "workspace": str(mounts[0]),
-            }, replace=True)
+            record_turn_stop(state, conversation_id, str(mounts[0]), event)
     print("{}")
+
+
+def record_turn_stop(state, conversation_id, workspace, event):
+    stopped_at = time.time_ns()
+    for receipt_file in state.glob("*/message-*.receipt.json"):
+        stage = receipt_file.name.split(".")[0]
+        marker = receipt_file.with_name(f"{stage}.stop.{conversation_id}.json")
+        if marker.exists() or receipt_file.with_name(f"{stage}.native-reply.json").exists():
+            continue
+        receipt = read_json(receipt_file)
+        if (receipt.get("status") not in {"dispatching", "sent"}
+                or receipt.get("workspace") != workspace
+                or receipt.get("conversation_id") not in {None, conversation_id}
+                or stopped_at < receipt.get("sent_at_ns", stopped_at)):
+            continue
+        request = read_json(receipt_file.with_name(f"{stage}.request.json"))
+        start = native_reply.stopped_turn(state, conversation_id, request["prompt"], receipt["after_step"])
+        if start is None:
+            continue
+        try:
+            # A new conversation can finish before agentapi returns its ID. The
+            # receiver uses only the marker for the ID confirmed by agentapi.
+            write_json(marker, {"at_ns": stopped_at, "turn_step": start, "workspace": workspace,
+                                "reason": event.get("terminationReason", "")})
+        except FileExistsError:
+            pass
 
 
 def dispatch(state, packet, stage, events, request):
@@ -228,13 +256,13 @@ def dispatch(state, packet, stage, events, request):
             raise ValueError("原始会话 ID 无效。")
         command = ["agentapi", "send-message", conversation_id, prompt]
 
+    metadata = {"after_step": native_reply.last_step(state, conversation_id), "sent_at_ns": time.time_ns(),
+                "workspace": request["workspace"]}
     try:
-        write_json(receipt, {"status": "dispatching"})
+        write_json(receipt, {"status": "dispatching", "conversation_id": conversation_id, **metadata})
     except FileExistsError:
         return
     try:
-        metadata = {"after_step": native_reply.last_step(state, conversation_id),
-                    "sent_at_ns": time.time_ns()}
         previous_events = set(events.glob("*.json")) if conversation_id is None else set()
         result = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
         if result.returncode:
@@ -265,22 +293,36 @@ def serve(args):
     if (not binding.get("enabled") or not route
             or not workspace_routes.binding_matches(args.config, sidecar, binding, route)):
         raise ValueError(f"Sidecar {sidecar} 的项目绑定无效。")
-    print(f"Antigravity Sidecar ready for {route.name}", flush=True)
+    with locked(args.state / f".{sidecar}.worker.lock"):
+        process_queue(args, events, binding["projectId"])
+
+
+def process_queue(args, events, native_project_id):
+    sidecar, project_id = args.sidecar, args.project
+    print(f"Antigravity Sidecar ready for {project_id}", flush=True)
     while True:
         for packet in sorted(args.state.glob("*/*.request.json")):
             job_id = packet.parent.name
             receipt = packet.with_name(packet.name.replace(".request.", ".receipt."))
             if (packet.is_symlink() or packet.parent.is_symlink()
                     or not CONVERSATION_ID.fullmatch(job_id)
-                    or not REQUEST_NAME.fullmatch(packet.name) or receipt.exists()):
+                    or not REQUEST_NAME.fullmatch(packet.name)):
                 continue
             try:
                 request = read_json(packet)
                 if request["project_id"] != project_id:
                     continue
+                if receipt.exists():
+                    if read_json(receipt).get("status") == "dispatching":
+                        write_json(receipt, {"status": "uncertain", "detail":
+                                    "Sidecar 在投递期间停止。可用「恢复任务」继续共享状态。"}, replace=True)
+                    continue
                 active_route = workspace_routes.load_project(args.config, project_id)
-                if not active_route or str(active_route.workspace) != request["workspace"]:
-                    write_json(receipt, {"status": "error", "detail": "Antigravity 项目的目录已变更。"})
+                active_binding = workspace_routes.bindings(args.config).get(sidecar, {})
+                if (not active_binding.get("enabled") or active_binding.get("projectId") != native_project_id
+                        or not active_route or str(active_route.workspace) != request["workspace"]
+                        or not workspace_routes.binding_matches(args.config, sidecar, active_binding, active_route)):
+                    write_json(receipt, {"status": "error", "detail": "Antigravity 项目的 Sidecar 或目录绑定已变更。"})
                     continue
                 dispatch(args.state, packet, packet.name.split(".")[0], events, request)
             except (OSError, ValueError, KeyError, TypeError) as exc:
