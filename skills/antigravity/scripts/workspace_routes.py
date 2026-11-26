@@ -159,12 +159,14 @@ def check_setup(config, state, bridge_file):
 
 
 def is_sidecar_projection(config, project, configured):
-    if (not project.name.startswith(PREFIX)
-            or not UUID.fullmatch(project.name.removeprefix(PREFIX))
-            or project.name == PREFIX + project.id):
-        return False
-    manifest = config / "sidecars" / project.name / "sidecar.json"
-    return project.name in configured or manifest.is_file()
+    for prefix in (PREFIX, "accowork-"):
+        if not project.name.startswith(prefix):
+            continue
+        if not UUID.fullmatch(project.name.removeprefix(prefix)) or project.name == prefix + project.id:
+            return False
+        manifest = config / "sidecars" / project.name / "sidecar.json"
+        return project.name in configured or manifest.is_file()
+    return False
 
 
 def binding_matches(config, name, settings, route):

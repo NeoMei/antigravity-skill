@@ -147,6 +147,21 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(json.loads(self.config_json.read_text())["sidecars"], {"existing": {"enabled": False}})
         self.assertFalse(self.state.exists())
 
+    def test_setup_can_coexist_with_a_legacy_sidecar_project(self):
+        label = f"accowork-{self.ids[0]}"
+        projected = str(uuid.uuid4())
+        old = json.loads((self.config / "projects" / f"{self.ids[0]}.json").read_text())
+        (self.config / "projects" / f"{projected}.json").write_text(
+            json.dumps({**old, "id": projected, "name": label}))
+        settings = json.loads(self.config_json.read_text())
+        settings["sidecars"][label] = {"enabled": True, "projectId": self.ids[0]}
+        self.config_json.write_text(json.dumps(settings))
+        self.run_bridge("setup")
+        ticket = self.run_bridge("send", body="Use the actual registered project").stdout.strip()
+        self.assertEqual(self.record(ticket, "request")["project_id"], self.ids[0])
+        self.assertEqual(json.loads(self.config_json.read_text())["sidecars"][label],
+                         settings["sidecars"][label])
+
     def test_native_reply_shared_context_and_workspace_isolation(self):
         self.run_bridge("setup")
         plan = self.run_bridge("send", "--mode", "plan", body="Plan alpha").stdout.strip()
