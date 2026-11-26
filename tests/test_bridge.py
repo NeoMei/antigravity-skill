@@ -47,13 +47,19 @@ user_type = "USER_INPUT" if not previous else "SYSTEM_MESSAGE"
 for transcript, content in ((full, body), (display, body[:15] + " [display abbreviated]")):
     with transcript.open("a") as f:
         rows = [
-            {"step_index": previous, "type": user_type, "content": before + content + after},
-            {"step_index": previous + 1, "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
+            {"type": user_type, "content": before + content + after},
+            {"type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
              "tool_calls": [{"name": "read_file"}], "content": "Intermediate tool step"},
-            {"step_index": previous + 2, "type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
+            {"type": "PLANNER_RESPONSE", "source": "MODEL", "status": "DONE",
              "content": os.environ["FIXTURE_ANSWER"], "thinking": "Do not relay this trace"},
         ]
-        f.write("".join(json.dumps(row) + "\n" for row in rows))
+        if os.environ.get("FIXTURE_RESTART_NOTICE"):
+            rows.insert(1, {"type": "SYSTEM_MESSAGE", "content":
+                            "[Message] timestamp=2026-01-01T00:00:00Z sender=system "
+                            "priority=MESSAGE_PRIORITY_LOW content=[Notice] Background tasks stopped."
+                            "\n</SYSTEM_MESSAGE>"})
+        for step_index, row in enumerate(rows, previous):
+            f.write(json.dumps({**row, "step_index": step_index}) + "\n")
 hook = json.loads((config / "hooks.json").read_text())["codex-antigravity-reply"]["Stop"][0]
 completed = subprocess.run(shlex.split(hook["command"]), input=json.dumps({
     "conversationId": conversation,
@@ -242,6 +248,16 @@ class BridgeTest(unittest.TestCase):
         self.serve(0)
         self.assertEqual(self.run_bridge("receive", ticket).stdout, REPLY)
         self.assertEqual(json.loads(self.hooks_json.read_text())["existing"], {"enabled": False})
+
+    def test_native_reply_survives_a_restart_notice(self):
+        self.run_bridge("setup")
+        initial = self.run_bridge("send", body="Start a conversation").stdout.strip()
+        self.serve(0)
+        self.assertEqual(self.run_bridge("receive", initial).stdout, REPLY)
+
+        followup = self.run_bridge("send", body="Continue in the same conversation").stdout.strip()
+        self.serve(0, FIXTURE_RESTART_NOTICE="1")
+        self.assertEqual(self.run_bridge("receive", followup, "--timeout", "1").stdout, REPLY)
 
     def test_worker_rechecks_binding_and_marks_interrupted_delivery(self):
         self.run_bridge("setup")

@@ -3,7 +3,7 @@ import json
 import re
 
 SIDE_CAR_MESSAGE = re.compile(
-    r"(?m)^\[Message\] timestamp=[^\n]* sender=system priority=[^\n]* content="
+    r"(?m)^\[Message\] timestamp=[^\n]* sender=system priority=(?P<priority>[^\s]+) content="
 )
 
 
@@ -47,7 +47,8 @@ def user_body(row):
         return text.removeprefix("<USER_REQUEST>\n").rpartition("\n</USER_REQUEST>")[0]
     if row.get("type") == "SYSTEM_MESSAGE":
         match = SIDE_CAR_MESSAGE.search(text)
-        if match:
+        # agentapi messages use high priority. Background notices share the same envelope.
+        if match and match["priority"] in {"HIGH", "MESSAGE_PRIORITY_HIGH"}:
             return text[match.end():].removesuffix("\n</SYSTEM_MESSAGE>")
     return None
 
