@@ -21,6 +21,16 @@
 
 移动 Skill 后，在新位置重新运行 `setup`。它会更新此桥接的回调和 Sidecar 路径。尽量避免与 Antigravity 设置界面同时修改配置，若检测到配置变化，重试初始化或首次发送。
 
+### 专用聊天
+
+如果想在同一个 Codex 聊天里直接和 Antigravity 对话，先登记一次会话模式入口：
+
+```sh
+python3 -B "$HOME/.agents/skills/antigravity/scripts/chat_mode.py" setup
+```
+
+然后在新开的 Codex 聊天里发一次 `启用 Antigravity`，之后直接发消息。绑定只对该本地聊天生效，重新打开仍可续聊。输入 `退出 Antigravity` 即可切回 Codex。上述安装命令会在用户级 Codex 指令中加入一个单独的会话模式区块。
+
 ## 用法
 
 | 输入 | 行为 |
