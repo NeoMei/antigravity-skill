@@ -1,6 +1,6 @@
 # Antigravity Skill for Codex
 
-从本机 Codex 聊天派单给 Antigravity Desktop、跟进实施和发起复审。Antigravity 的答复以 `Antigravity：` 加原文回到 Codex。
+从本机 Codex 聊天向 Antigravity Desktop 提问、派单和发起复审。Gemini 可把工作分给多个独立的 Codex 会话，再在原主控会话检查结果。Antigravity 的答复以 `Antigravity：` 加原文回到 Codex。
 
 ## 安装
 
@@ -9,6 +9,8 @@
 1. 启动 Antigravity Desktop 并登录。
 2. 克隆仓库，从仓库根目录安装 Skill。已有同名 Skill 时，先备份原目录。
    ```sh
+   git clone https://github.com/NeoMei/antigravity-skill.git
+   cd antigravity-skill
    mkdir -p "$HOME/.agents/skills"
    cp -R skills/antigravity "$HOME/.agents/skills/"
    python3 -B "$HOME/.agents/skills/antigravity/scripts/bridge.py" setup
@@ -31,8 +33,17 @@
 | `$antigravity 恢复任务 消息` | 带着当前任务状态重开主控会话 |
 | `$antigravity 恢复任务 任务ID 消息` | 在同一工作目录的另一个 Codex 聊天恢复任务 |
 
+### 独立 Codex 会话
+
+分工时需能从终端运行 `codex`。
+
+- `$antigravity 分工执行 消息` 启动独立的只读会话，共用当前目录。
+- `$antigravity 分工实施 消息` 从主分支基线为各写入任务创建独立 Git worktree 和分支。
+
+每次分工执行一轮派单、实施和复审，保留各 Codex 会话 ID 和本地结果。 [分工说明](skills/antigravity/references/coordination.md)
+
 ## 验证
 
-`python3 -B -m unittest discover -s tests -v` 运行本机夹具测试，覆盖初始化、原生回传协议、同会话续接和跨项目隔离。夹具使用合成数据模拟 Antigravity Desktop。
+`python3 -B -m unittest discover -s tests -v` 运行本机夹具测试，覆盖自动登记、原生回传协议、会话续接、跨项目隔离和分工。夹具使用合成数据模拟 Antigravity Desktop。
 
 [Codex 技能文档](https://learn.chatgpt.com/docs/build-skills) · [Antigravity Sidecar 文档](https://antigravity.google/docs/sidecars) · [Antigravity Hooks 文档](https://antigravity.google/docs/hooks)
